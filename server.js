@@ -1,39 +1,54 @@
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('@distube/ytdl-core');
+const ytDlp = require('yt-dlp-exec');
 const app = express();
 
 app.use(cors());
 
-// Test route to ensure server is alive
 app.get('/', (req, res) => {
-    res.send('Server is up and running');
+    res.send('Server is up and running!');
 });
 
 app.get('/download', async (req, res) => {
     try {
         const videoURL = req.query.url;
 
-        if (!videoURL || !ytdl.validateURL(videoURL)) {
-            return res.status(400).send('Please enter a valid YouTube link.');
+        if (!videoURL) {
+            return res.status(400).send('Please provide a valid YouTube URL.');
         }
 
-        const info = await ytdl.getInfo(videoURL);
-        const title = info.videoDetails.title.replace(/[^\w\s]/gi, '');
+        // Fetch video metadata using yt-dlp
+        const output = await ytDlp(videoURL, {
+            dumpSingleJson: true,
+            noWarnings: true,
+            noCallHome: true,
+            noCheckCertificate: true,
+            preferFreeFormats: true,
+            youtubeSkipDashManifest: true
+        });
 
+        const title = (output.title || 'video').replace(/[^\w\s]/gi, '');
+        
+        // Find a pre-merged format (has both video and audio)
+        const format = output.formats.reverse().find(
+            f => f.vcodec !== 'none' && f.acodec !== 'none' && f.ext === 'mp4'
+        ) || output.formats[0];
+
+        if (!format || !format.url) {
+            return res.status(500).send('Could not find a downloadable stream.');
+        }
+
+        // Set response header to force file download in browser
         res.header('Content-Disposition', `attachment; filename="${title}.mp4"`);
         
-        ytdl(videoURL, {
-            format: 'mp4',
-            filter: 'audioandvideo',
-            quality: 'highest'
-        }).pipe(res);
+        // Redirect client to direct stream URL
+        res.redirect(format.url);
 
     } catch (error) {
-        console.error('Download error:', error);
-        res.status(500).send('YouTube blocked this stream request or video is unavailable.');
+        console.error('yt-dlp Error:', error);
+        res.status(500).send('Failed to process video. YouTube may have updated its signatures.');
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
